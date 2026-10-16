@@ -29,11 +29,12 @@ func (r *TechnicianRepo) GetByTechnicianID(ctx context.Context, id uuid.UUID) (d
 func (r *TechnicianRepo) ListByZoneAndSkill(ctx context.Context, zonePK int64, skill string) ([]domains.Technician, error) {
 	rows, err := r.db.Query(ctx, QueryListTechniciansByZoneAndSkill, zonePK, skill)
 	if err != nil {
-		return nil, err
+		return nil, mapError(err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domains.Technician, error) {
+	techs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domains.Technician, error) {
 		return scanTechnician(row)
 	})
+	return techs, mapError(err)
 }
 
 func scanTechnician(row pgx.Row) (domains.Technician, error) {

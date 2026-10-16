@@ -1,6 +1,10 @@
 package utils
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,5 +80,18 @@ func TestStartOfDayUsesISTCalendar(t *testing.T) {
 	got := StartOfDay(time.Date(2026, 10, 17, 20, 0, 0, 0, time.UTC))
 	if want := time.Date(2026, 10, 18, 0, 0, 0, 0, IST); !got.Equal(want) {
 		t.Errorf("StartOfDay = %v, want %v", got, want)
+	}
+}
+
+func TestLogHandlerAddsRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(NewLogHandler(slog.NewJSONHandler(&buf, nil)))
+
+	log.InfoContext(WithRequestID(context.Background(), "req-42"), "with id")
+	log.InfoContext(context.Background(), "without id")
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"requestId":"req-42"`) || strings.Contains(lines[1], "requestId") {
+		t.Fatalf("log output:\n%s", buf.String())
 	}
 }

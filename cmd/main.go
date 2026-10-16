@@ -21,7 +21,7 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(utils.NewLogHandler(slog.NewJSONHandler(os.Stdout, nil))))
 	gin.SetMode(gin.ReleaseMode)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -1,10 +1,12 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/api"
@@ -371,4 +374,61 @@ func TestHealthEndpoints(t *testing.T) {
 	if res, _ := http.Get(degraded.URL + "/healthz"); res.StatusCode != http.StatusOK {
 		t.Fatalf("healthz must ignore dependencies, got %d", res.StatusCode)
 	}
+}
+
+// The two retryable 503s, over HTTP, each with Retry-After.
+func TestBookingDependencyFailures(t *testing.T) {
+	reset(t)
+	ctx := context.Background()
+	want503 := func(t *testing.T, r response, code string) {
+		t.Helper()
+		var e models.ErrorResponse
+		r.decode(t, &e)
+		if r.status != http.StatusServiceUnavailable || e.Error.Code != code || r.header.Get("Retry-After") != "1" {
+			t.Fatalf("got %d Retry-After=%q %s, want 503 %s with Retry-After: 1", r.status, r.header.Get("Retry-After"), r.body, code)
+		}
+	}
+	serve := func(t *testing.T, d api.Deps) string {
+		srv := httptest.NewServer(api.NewRouter(d))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	post := func(t *testing.T, base string) response {
+		t.Helper()
+		raw, _ := json.Marshal(bookingBody(batteryID, 110001, "10:00", "9876543210"))
+		res, err := http.Post(base+"/bookings", "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		body, _ := io.ReadAll(res.Body)
+		return response{status: res.StatusCode, header: res.Header, body: body}
+	}
+
+	t.Run("BOOKING_BUSY when the technician lock stays held", func(t *testing.T) {
+		// Ravi is the first-ranked candidate; someone else holds his lock for the day.
+		rdb.Set(ctx, "lock:tech:"+raviID+":"+testDay, "someone-else", 10*time.Second)
+		defer rdb.Del(ctx, "lock:tech:"+raviID+":"+testDay)
+		want503(t, call(t, "POST", "/bookings", bookingBody(batteryID, 110001, "10:00", "9876543210")), "BOOKING_BUSY")
+	})
+
+	t.Run("DEPENDENCY_UNAVAILABLE when Redis is down", func(t *testing.T) {
+		deadRedis := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+		defer deadRedis.Close()
+		base := serve(t, api.Deps{DB: pool, Redis: deadRedis, Now: clock.Now})
+		want503(t, post(t, base), "DEPENDENCY_UNAVAILABLE")
+		if res, _ := http.Get(base + "/availability?serviceId=" + batteryID + "&pincode=110001&date=" + testDay); res.StatusCode != http.StatusOK {
+			t.Fatalf("reads must keep working without Redis, got %d", res.StatusCode)
+		}
+	})
+
+	t.Run("DEPENDENCY_UNAVAILABLE when Postgres is down", func(t *testing.T) {
+		deadDB, err := pgxpool.New(ctx, "postgres://booking:booking@127.0.0.1:1/booking?sslmode=disable&connect_timeout=1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer deadDB.Close()
+		base := serve(t, api.Deps{DB: deadDB, Redis: rdb, Now: clock.Now})
+		want503(t, post(t, base), "DEPENDENCY_UNAVAILABLE")
+	})
 }

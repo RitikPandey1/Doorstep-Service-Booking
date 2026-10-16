@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/utils"
 )
 
 // AccessLog writes one structured line per request. Health probes are skipped to keep logs readable.
@@ -20,7 +18,6 @@ func AccessLog() gin.HandlerFunc {
 		start := time.Now()
 		c.Next()
 		slog.InfoContext(c.Request.Context(), "request",
-			"requestId", c.GetString(utils.RequestIDKey),
 			"method", c.Request.Method,
 			"path", path,
 			"route", c.FullPath(),

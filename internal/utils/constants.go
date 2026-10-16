@@ -40,6 +40,3 @@ const (
 	DefaultPageSize = 20
 	MaxPageSize     = 100
 )
-
-// RequestIDKey is the gin context key holding the request id.
-const RequestIDKey = "requestId"

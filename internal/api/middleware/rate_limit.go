@@ -16,7 +16,10 @@ import (
 )
 
 // RateLimit allows limit requests per client IP per fixed window, counted in Redis so
-// all API replicas share one budget for now (we can extented it per api path rate limiting on cloudflare or dns level or we can implement that here too when system scale). It fails open: a limiter outage must not block bookings.
+// all API replicas share one budget. It fails open: a limiter outage must not block bookings.
+//
+// shortcut: one fixed-window per-IP limit on POST /bookings only; move to per-route limits
+// (here, or at the edge such as Cloudflare/DNS level) when traffic grows.
 func RateLimit(rdb *redis.Client, limit int, window time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
@@ -31,8 +34,7 @@ func RateLimit(rdb *redis.Client, limit int, window time.Duration) gin.HandlerFu
 			return nil
 		})
 		if err != nil {
-			slog.WarnContext(ctx, "rate limiter unavailable, allowing request",
-				"error", err, "requestId", c.GetString(utils.RequestIDKey))
+			slog.WarnContext(ctx, "rate limiter unavailable, allowing request", "error", err)
 			c.Next()
 			return
 		}

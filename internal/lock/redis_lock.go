@@ -58,7 +58,7 @@ func (l *RedisLocker) Acquire(ctx context.Context, key string) (func(), error) {
 			return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 		}
 		if ok {
-			return func() { l.release(key, token) }, nil
+			return func() { l.release(ctx, key, token) }, nil
 		}
 		if time.Now().After(deadline) {
 			return nil, ErrTimeout
@@ -71,12 +71,12 @@ func (l *RedisLocker) Acquire(ctx context.Context, key string) (func(), error) {
 	}
 }
 
-func (l *RedisLocker) release(key, token string) {
-	// Detached context: release must run even if the request context is already cancelled.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+func (l *RedisLocker) release(ctx context.Context, key, token string) {
+	// WithoutCancel: release must run even if the request was cancelled; it keeps the request id for logs.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
 	if err := releaseScript.Run(ctx, l.client, []string{key}, token).Err(); err != nil {
 		// The TTL frees the lock eventually; nothing else to do.
-		slog.Warn("lock release failed", "key", key, "error", err)
+		slog.WarnContext(ctx, "lock release failed", "key", key, "error", err)
 	}
 }

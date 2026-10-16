@@ -65,7 +65,7 @@ func (r *BookingRepo) TransitionStatus(ctx context.Context, bookingPK int64, fro
 func (r *BookingRepo) ListByPhone(ctx context.Context, f BookingFilter) ([]domains.Booking, int, error) {
 	var total int
 	if err := r.db.QueryRow(ctx, QueryCountBookingsByPhone, f.Phone, f.Status, f.From, f.To).Scan(&total); err != nil {
-		return nil, 0, err
+		return nil, 0, mapError(err)
 	}
 	items, err := r.list(ctx, QueryListBookingsByPhone, f.Phone, f.Status, f.From, f.To, f.Limit, f.Offset)
 	return items, total, err
@@ -74,11 +74,12 @@ func (r *BookingRepo) ListByPhone(ctx context.Context, f BookingFilter) ([]domai
 func (r *BookingRepo) list(ctx context.Context, query string, args ...any) ([]domains.Booking, error) {
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, mapError(err)
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domains.Booking, error) {
+	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domains.Booking, error) {
 		return scanBooking(row)
 	})
+	return items, mapError(err)
 }
 
 func scanBooking(row pgx.Row) (domains.Booking, error) {
