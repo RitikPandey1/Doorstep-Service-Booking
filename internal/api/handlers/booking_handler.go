@@ -33,6 +33,19 @@ func (h *BookingHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, b.ToResponse())
 }
 
+// List handles GET /bookings?phone=&status=&from=&to=&page=&size=.
+func (h *BookingHandler) List(c *gin.Context) {
+	resp, err := h.bookings.List(c.Request.Context(), services.ListQuery{
+		Phone: c.Query("phone"), Status: c.Query("status"), From: c.Query("from"), To: c.Query("to"),
+		Page: c.Query("page"), Size: c.Query("size"),
+	})
+	if err != nil {
+		RespondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 // Get handles GET /bookings/:id.
 func (h *BookingHandler) Get(c *gin.Context) {
 	b, err := h.bookings.Get(c.Request.Context(), c.Param("id"))

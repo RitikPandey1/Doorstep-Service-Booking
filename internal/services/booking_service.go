@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -219,6 +221,72 @@ func (s *BookingService) Cancel(ctx context.Context, id string) (domains.Booking
 		return s.Get(ctx, id) // status changed concurrently; report the current state
 	}
 	return out, err
+}
+
+// ListQuery holds the raw query params of GET /bookings.
+type ListQuery struct {
+	Phone, Status, From, To, Page, Size string
+}
+
+// List returns one page of a customer's bookings, newest first. from/to are inclusive IST dates.
+func (s *BookingService) List(ctx context.Context, q ListQuery) (models.BookingListResponse, error) {
+	phone, ok := utils.NormalizePhone(q.Phone)
+	if !ok {
+		return models.BookingListResponse{}, utils.ValidationError("phone is required and must be a 10-digit Indian mobile number")
+	}
+	f := repository.BookingFilter{Phone: phone}
+	if q.Status != "" {
+		if q.Status != utils.StatusConfirmed && q.Status != utils.StatusCancelled && q.Status != utils.StatusCompleted {
+			return models.BookingListResponse{}, utils.ValidationError("status must be CONFIRMED, CANCELLED or COMPLETED")
+		}
+		f.Status = &q.Status
+	}
+	if q.From != "" {
+		from, err := utils.ParseDate(q.From)
+		if err != nil {
+			return models.BookingListResponse{}, utils.ValidationError("from must be YYYY-MM-DD")
+		}
+		f.From = &from
+	}
+	if q.To != "" {
+		to, err := utils.ParseDate(q.To)
+		if err != nil {
+			return models.BookingListResponse{}, utils.ValidationError("to must be YYYY-MM-DD")
+		}
+		to = to.Add(24 * time.Hour) // inclusive end date
+		f.To = &to
+	}
+	page, err := intParam(q.Page, 1, 1, math.MaxInt32)
+	if err != nil {
+		return models.BookingListResponse{}, utils.ValidationError("page must be a positive integer")
+	}
+	size, err := intParam(q.Size, utils.DefaultPageSize, 1, utils.MaxPageSize)
+	if err != nil {
+		return models.BookingListResponse{}, utils.ValidationError(fmt.Sprintf("size must be between 1 and %d", utils.MaxPageSize))
+	}
+	f.Limit, f.Offset = size, (page-1)*size
+
+	items, total, err := s.bookings.ListByPhone(ctx, f)
+	if err != nil {
+		return models.BookingListResponse{}, err
+	}
+	resp := models.BookingListResponse{Items: []models.BookingResponse{}, Page: page, Size: size, Total: total}
+	for _, b := range items {
+		resp.Items = append(resp.Items, b.ToResponse())
+	}
+	return resp, nil
+}
+
+// intParam parses an optional integer query param within [lo, hi].
+func intParam(s string, def, lo, hi int) (int, error) {
+	if s == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < lo || n > hi {
+		return 0, errors.New("out of range")
+	}
+	return n, nil
 }
 
 // lookupServiceAndZone resolves the public service id and the pincode's zone.

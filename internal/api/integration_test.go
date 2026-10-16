@@ -258,3 +258,30 @@ func TestExclusionConstraintBackstop(t *testing.T) {
 		t.Fatalf("err = %v, want ErrOverlap", err)
 	}
 }
+
+func TestListBookingsByPhone(t *testing.T) {
+	reset(t)
+	var b1, b2 models.BookingResponse
+	call(t, "POST", "/bookings", bookingBody(batteryID, 110001, "10:00", "9876543210")).decode(t, &b1)
+	call(t, "POST", "/bookings", bookingBody(jumpID, 110001, "14:00", "+919876543210")).decode(t, &b2)
+	call(t, "POST", "/bookings", bookingBody(batteryID, 110001, "12:00", "9000000000")) // another customer
+	call(t, "POST", "/bookings/"+b1.ID+"/cancel", nil)
+
+	var page models.BookingListResponse
+	r := call(t, "GET", "/bookings?phone=9876543210&size=1", nil)
+	r.decode(t, &page)
+	if r.status != http.StatusOK || page.Total != 2 || page.Size != 1 || len(page.Items) != 1 || page.Items[0].ID != b2.ID {
+		t.Fatalf("page 1: %d %s", r.status, r.body)
+	}
+	call(t, "GET", "/bookings?phone=9876543210&size=1&page=2", nil).decode(t, &page)
+	if len(page.Items) != 1 || page.Items[0].ID != b1.ID {
+		t.Fatalf("page 2: %+v", page)
+	}
+	call(t, "GET", "/bookings?phone=9876543210&status=CANCELLED&from="+testDay+"&to="+testDay, nil).decode(t, &page)
+	if page.Total != 1 || page.Items[0].ID != b1.ID {
+		t.Fatalf("filtered: %+v", page)
+	}
+	if r := call(t, "GET", "/bookings", nil); r.status != http.StatusBadRequest {
+		t.Fatalf("missing phone: %d", r.status)
+	}
+}

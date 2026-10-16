@@ -47,6 +47,7 @@ func NewRouter(d Deps) *gin.Engine {
 
 	r.GET("/availability", availabilityH.Get)
 	r.POST("/bookings", bookingH.Create)
+	r.GET("/bookings", bookingH.List)
 	r.GET("/bookings/:id", bookingH.Get)
 	r.POST("/bookings/:id/cancel", bookingH.Cancel)
 	r.GET("/technicians/:id/schedule", technicianH.Schedule)

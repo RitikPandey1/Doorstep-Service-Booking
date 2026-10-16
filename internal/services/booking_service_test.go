@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -352,4 +353,66 @@ func TestCancel(t *testing.T) {
 		_, err := newEnv().svc.Cancel(ctx, uuid.NewString())
 		wantAppError(t, err, http.StatusNotFound, utils.CodeNotFound)
 	})
+}
+
+func TestList(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv()
+	mine := func(start time.Time, status string) domains.Booking {
+		return e.db.add(domains.Booking{CustomerPhone: "9876543210", ServicePK: batterySvc.PK, TechnicianPK: ravi.PK,
+			StartTime: start, EndTime: start.Add(hour), Status: status})
+	}
+	d1 := mine(at("10:00"), utils.StatusConfirmed)
+	d2 := mine(at("10:00").Add(24*hour), utils.StatusCancelled)
+	d3 := mine(at("10:00").Add(48*hour), utils.StatusConfirmed)
+	e.db.add(domains.Booking{CustomerPhone: "9000000000", ServicePK: batterySvc.PK, TechnicianPK: amit.PK,
+		StartTime: at("10:00"), EndTime: at("11:00")}) // someone else's
+
+	ids := func(r models.BookingListResponse) []string {
+		out := make([]string, len(r.Items))
+		for i, b := range r.Items {
+			out[i] = b.ID
+		}
+		return out
+	}
+	tests := []struct {
+		name  string
+		q     ListQuery
+		want  []domains.Booking
+		total int
+	}{
+		{"all mine, newest first", ListQuery{Phone: "+919876543210"}, []domains.Booking{d3, d2, d1}, 3},
+		{"status filter", ListQuery{Phone: "9876543210", Status: "CONFIRMED"}, []domains.Booking{d3, d1}, 2},
+		{"inclusive date range", ListQuery{Phone: "9876543210", From: "2026-10-19", To: "2026-10-19"}, []domains.Booking{d2}, 1},
+		{"page 2 of size 2", ListQuery{Phone: "9876543210", Page: "2", Size: "2"}, []domains.Booking{d1}, 3},
+		{"page past the end", ListQuery{Phone: "9876543210", Page: "5"}, nil, 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := e.svc.List(ctx, tc.q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := make([]string, len(tc.want))
+			for i, b := range tc.want {
+				want[i] = b.BookingID.String()
+			}
+			if got.Total != tc.total || got.Items == nil || !slices.Equal(ids(got), want) {
+				t.Fatalf("got %v total %d, want %v total %d", ids(got), got.Total, want, tc.total)
+			}
+		})
+	}
+
+	for _, q := range []ListQuery{
+		{},
+		{Phone: "123"},
+		{Phone: "9876543210", Status: "DONE"},
+		{Phone: "9876543210", From: "yesterday"},
+		{Phone: "9876543210", Page: "0"},
+		{Phone: "9876543210", Size: "101"},
+		{Phone: "9876543210", Size: "abc"},
+	} {
+		_, err := e.svc.List(ctx, q)
+		wantAppError(t, err, http.StatusBadRequest, utils.CodeValidation)
+	}
 }

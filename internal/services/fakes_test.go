@@ -149,6 +149,21 @@ func (f *fakeDB) TransitionStatus(_ context.Context, pk int64, from, to string) 
 	return domains.Booking{}, repository.ErrNotFound
 }
 
+func (f *fakeDB) ListByPhone(_ context.Context, q repository.BookingFilter) ([]domains.Booking, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var match []domains.Booking
+	for _, b := range f.bookings {
+		if b.CustomerPhone == q.Phone && (q.Status == nil || b.Status == *q.Status) &&
+			(q.From == nil || !b.StartTime.Before(*q.From)) && (q.To == nil || b.StartTime.Before(*q.To)) {
+			match = append(match, b)
+		}
+	}
+	slices.SortFunc(match, func(a, b domains.Booking) int { return b.StartTime.Compare(a.StartTime) }) // newest first
+	lo, hi := min(q.Offset, len(match)), min(q.Offset+q.Limit, len(match))
+	return match[lo:hi], len(match), nil
+}
+
 func (f *fakeDB) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

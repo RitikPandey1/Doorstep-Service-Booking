@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/domains"
+	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/repository"
 )
 
 // Storage the services depend on; implemented by the repository package and by test fakes.
@@ -30,4 +31,5 @@ type BookingStore interface {
 	GetByIdempotencyKey(ctx context.Context, key string) (domains.Booking, error)
 	ListLiveForTechnicians(ctx context.Context, technicianPKs []int64, from, to time.Time) ([]domains.Booking, error)
 	TransitionStatus(ctx context.Context, bookingPK int64, from, to string) (domains.Booking, error)
+	ListByPhone(ctx context.Context, f repository.BookingFilter) ([]domains.Booking, int, error)
 }
