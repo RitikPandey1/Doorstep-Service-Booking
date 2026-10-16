@@ -269,3 +269,17 @@ internal/domains/           DB structs + converters to API models
 internal/utils/             constants, errors, IST time helpers, validation
 ```
 
+---
+
+## AI usage
+
+**Tool:** Claude Code (Anthropic's coding agent), with two skills: *grilling* (requirements and design interview) and *to-spec* (turns that conversation into a spec).
+
+| Used for | How |
+|----------|-----|
+| Requirements and design | The agent pulled every must-have and nice-to-have out of the brief, then grilled me in rounds of questions, about 40 in total, each with a recommended answer. **I made every decision**, for example: Go + Gin, a Redis lock as the primary mechanism with the Postgres exclusion constraint as backstop, integer PKs plus UUID business ids, a separate pincode table, and the project layout. |
+| Specification | Generated [docs/specs/doorstep-service-booking.md](docs/specs/doorstep-service-booking.md) from that conversation. |
+| Implementation | Wrote the code against the spec in small commits, each with its tests: unit tests on the pure rules, service tests with fakes, and testcontainers integration and concurrency tests. |
+| Docs | Drafted this README and [DESIGN.md](DESIGN.md), which I then edited. |
+
+**What I did:** reviewed every change before it was committed, ran the tests and the Docker stack myself, and asked for changes where I disagreed. Examples: the 429 body must not expose the rate-limit config, the limit and window should come from environment variables, and the README URLs should be explicit `http://`. I can explain and change any line of this code.
