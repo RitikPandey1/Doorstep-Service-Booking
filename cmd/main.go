@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -39,7 +41,12 @@ func main() {
 	rdb := redis.NewClient(redisOpts)
 	defer rdb.Close()
 
-	router := api.NewRouter(api.Deps{DB: pool, Redis: rdb, Now: time.Now})
+	rateLimit, err := strconv.Atoi(utils.GetEnv("RATE_LIMIT_PER_MINUTE", "10"))
+	if err != nil || rateLimit < 0 {
+		fatal("parse RATE_LIMIT_PER_MINUTE", fmt.Errorf("want a non-negative integer, got %q", os.Getenv("RATE_LIMIT_PER_MINUTE")))
+	}
+
+	router := api.NewRouter(api.Deps{DB: pool, Redis: rdb, Now: time.Now, BookingRateLimit: rateLimit})
 	srv := api.NewServer(":"+utils.GetEnv("PORT", "8080"), router)
 
 	go func() {

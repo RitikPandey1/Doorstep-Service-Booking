@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/api"
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/models"
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/repository"
 )
@@ -298,5 +301,33 @@ func TestRequestID(t *testing.T) {
 	r = call(t, "GET", "/bookings/"+uuid.NewString(), nil, "X-Request-Id", "bad id with spaces")
 	if id := r.header.Get("X-Request-Id"); uuid.Validate(id) != nil {
 		t.Fatalf("invalid client id should be replaced by a UUID, got %q", id)
+	}
+}
+
+func TestRateLimitOnCreateBooking(t *testing.T) {
+	reset(t)
+	limited := httptest.NewServer(api.NewRouter(api.Deps{DB: pool, Redis: rdb, Now: clock.Now, BookingRateLimit: 2}))
+	defer limited.Close()
+	post := func() *http.Response {
+		res, err := http.Post(limited.URL+"/bookings", "application/json", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res
+	}
+
+	// The limiter runs before the handler, so invalid bodies still count.
+	for i := range 2 {
+		if res := post(); res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("request %d: %d, want 400 from the handler", i+1, res.StatusCode)
+		}
+	}
+	res := post()
+	if res.StatusCode != http.StatusTooManyRequests || res.Header.Get("Retry-After") == "" {
+		t.Fatalf("third request: %d Retry-After=%q, want 429 with Retry-After", res.StatusCode, res.Header.Get("Retry-After"))
+	}
+	if res, _ := http.Get(limited.URL + "/bookings/" + uuid.NewString()); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET must not be rate limited, got %d", res.StatusCode)
 	}
 }

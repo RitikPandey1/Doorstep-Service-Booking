@@ -47,6 +47,7 @@ const testDay = "2026-11-02"
 var (
 	server *httptest.Server
 	pool   *pgxpool.Pool
+	rdb    *redis.Client
 	clock  = &fakeClock{}
 )
 
@@ -119,8 +120,9 @@ func setup() (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	rdb := redis.NewClient(opts)
+	rdb = redis.NewClient(opts)
 	gin.SetMode(gin.TestMode)
+	// Rate limiting off here: the race tests fire many POSTs from one IP. TestRateLimit enables it.
 	server = httptest.NewServer(api.NewRouter(api.Deps{DB: pool, Redis: rdb, Now: clock.Now}))
 
 	return func() {
@@ -151,13 +153,16 @@ func migrate(ctx context.Context) error {
 	return nil
 }
 
-// reset skips in -short mode, clears bookings and puts the clock at 06:00 IST on testDay.
+// reset skips in -short mode, clears bookings and Redis, and puts the clock at 06:00 IST on testDay.
 func reset(t *testing.T) {
 	t.Helper()
 	if server == nil {
 		t.Skip("integration test: needs Docker")
 	}
 	if _, err := pool.Exec(context.Background(), "TRUNCATE bookings"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.FlushAll(context.Background()).Err(); err != nil { // locks and rate-limit counters
 		t.Fatal(err)
 	}
 	clock.Set(istTime(t, "06:00"))

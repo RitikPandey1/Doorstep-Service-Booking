@@ -22,6 +22,8 @@ type Deps struct {
 	DB    *pgxpool.Pool
 	Redis *redis.Client
 	Now   func() time.Time
+	// BookingRateLimit is POST /bookings requests per client IP per minute; 0 disables it.
+	BookingRateLimit int
 }
 
 // NewRouter wires repositories → services → handlers and registers all routes.
@@ -53,7 +55,11 @@ func NewRouter(d Deps) *gin.Engine {
 	})
 
 	r.GET("/availability", availabilityH.Get)
-	r.POST("/bookings", bookingH.Create)
+	createBooking := []gin.HandlerFunc{bookingH.Create}
+	if d.BookingRateLimit > 0 {
+		createBooking = append([]gin.HandlerFunc{middleware.RateLimit(d.Redis, d.BookingRateLimit, time.Minute)}, createBooking...)
+	}
+	r.POST("/bookings", createBooking...)
 	r.GET("/bookings", bookingH.List)
 	r.GET("/bookings/:id", bookingH.Get)
 	r.POST("/bookings/:id/cancel", bookingH.Cancel)
