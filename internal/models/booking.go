@@ -2,10 +2,10 @@
 package models
 
 type CreateBookingRequest struct {
-	ServiceID string `json:"serviceId" binding:"required"`
-	Pincode   int    `json:"pincode" binding:"required"`
-	StartTime string `json:"startTime" binding:"required"`
-	Phone     string `json:"phone" binding:"required"`
+	ServiceID string `json:"serviceId"`
+	Pincode   int    `json:"pincode"`
+	StartTime string `json:"startTime"`
+	Phone     string `json:"phone"`
 }
 
 type TechnicianRef struct {

@@ -34,3 +34,6 @@ const (
 )
 
 const MaxIdempotencyKeyLen = 255
+
+// RequestIDKey is the gin context key holding the request id.
+const RequestIDKey = "requestId"
