@@ -47,7 +47,7 @@ A REST booking service written in Go (Gin) on PostgreSQL, with Redis for distrib
 21. As a customer, I want a failed booking attempt (e.g. no availability) not to burn my Idempotency-Key, so that a later retry with the same key can still succeed.
 22. As a customer, I want booking without an Idempotency-Key to still work, so that the header is optional.
 23. As a customer, I want a retryable "busy" error (503 with Retry-After) when the system cannot get to my booking in time, so that I know retrying is safe.
-24. As a customer, I want a clear "service temporarily unavailable" error when a dependency the booking flow needs is down, so that I am not told there is no availability when there is.
+24. As a customer, I want a clear "service temporarily unavailable" error (503, retryable) when a dependency the booking flow needs (Redis or Postgres) is down, so that I am not told there is no availability when there is.
 
 ### Assignment rules
 25. As the business, I want a technician assigned only to pincodes in their own zone, so that travel stays local.
@@ -91,8 +91,8 @@ A REST booking service written in Go (Gin) on PostgreSQL, with Redis for distrib
 57. As an API client, I want every error in one consistent body (code, message, details, request id), so that I can handle errors uniformly.
 58. As an API client, I want correct HTTP status codes (400, 404, 409, 422, 429, 503), so that I can react without parsing messages.
 59. As an API client, I want an `X-Request-Id` I send to be echoed back (or a new one generated), so that I can correlate my calls with server logs.
-60. As an operator, I want structured JSON logs with the request id on every line and one access-log line per request (method, path, status, latency), so that I can trace and debug requests.
-61. As an operator, I want booking creation rate-limited per client IP (10 per minute) with 429 and Retry-After, so that abusive clients cannot exhaust capacity.
+60. As an operator, I want structured JSON logs with the request id on every line logged during a request, and one access-log line per request (method, path, status, latency) except liveness/readiness probes, so that I can trace and debug requests without probe noise.
+61. As an operator, I want booking creation rate-limited per client IP (default 10 per minute, configurable) with 429, Retry-After and the wait in the body (but never the limit itself), so that abusive clients cannot exhaust capacity.
 62. As an operator, I want the rate limiter to let requests through when Redis is down, so that a limiter outage does not block bookings.
 63. As an operator, I want a liveness endpoint that reports the process is up without touching dependencies, so that orchestrators do not restart healthy pods during a DB blip.
 64. As an operator, I want a readiness endpoint that checks PostgreSQL and Redis and returns 503 with per-dependency status when either is down, so that traffic is only routed to ready instances.
@@ -107,18 +107,18 @@ A REST booking service written in Go (Gin) on PostgreSQL, with Redis for distrib
 
 ### Stack and runtime
 - Go with the Gin framework. PostgreSQL 16. Redis 7. Plain SQL through pgx v5 (no ORM), because the booking insert needs precise control over SQLSTATE codes. Schema in plain SQL migrations applied by golang-migrate. Logging with the standard-library structured logger (JSON).
-- Config comes only from environment variables: database URL, Redis URL, port.
+- Config comes only from environment variables: database URL, Redis URL, port, and the booking rate limit (`RATE_LIMIT_REQUESTS`, default 10, 0 disables; `RATE_LIMIT_WINDOW`, default 1m).
 - Docker Compose startup order: postgres and redis healthy → one-shot migrate → one-shot seed → api. The api healthcheck uses readiness.
 - All time is IST. Timestamps are stored as timestamptz. API timestamps are ISO-8601 with offset, input without an offset is treated as IST, and responses are always rendered in IST. Date params are `YYYY-MM-DD` (IST). "Now" comes from an injectable clock.
 
 ### Modules
 - **Entry points:** the API binary (wiring, graceful shutdown) and a separate seed binary.
-- **API layer:** server/router setup; handlers for bookings, availability, technicians and health; middleware for request id, access log and rate limit. Handlers only bind and validate input, call services, and map errors to HTTP.
+- **API layer:** server/router setup; handlers for bookings, availability, technicians and health; middleware for request id, access log and rate limit. Handlers only bind input (JSON body, path and query strings), call services, and map errors to HTTP. Field validation and parsing live in the services, so the rules are unit-testable without HTTP.
 - **Services:** booking service (create, get, cancel, list-by-phone, idempotency), availability service, technician service (schedule). A separate pure **assignment** module holds all rules as side-effect-free functions: slot generation, overlap with buffer, shift fit, booking window, candidate ranking. Services depend on repository and lock **interfaces** so they can be tested with fakes.
-- **Repository:** one repository per aggregate (booking, technician, service, zone). All SQL lives in one constants file in the repository package.
+- **Repository:** one repository per aggregate (booking, technician, service, zone). All repository SQL lives in one constants file in the repository package. The standalone seed command keeps its own insert statements.
 - **Lock:** a `Locker` interface with a Redis implementation (acquire with wait and timeout, release by token).
 - **Models:** API request/response DTOs only. They import no other internal package.
-- **Domains:** DB-facing structs plus **all** converters between domains and models (e.g. booking → response, request → new booking). They live here to avoid an import cycle.
+- **Domains:** DB-facing structs plus the converters from domain to API model (e.g. booking → response, technician → reference). They live here to avoid an import cycle. A new booking is built in the booking service from the validated request, because it needs the chosen technician and the computed end/blocked times. Composite responses (availability, schedule, list) are assembled in their service from these converters.
 - **Utils:** shared constants, the application error type (code + HTTP status), IST/time helpers, phone normaliser.
 
 ### Schema
@@ -150,18 +150,19 @@ A REST booking service written in Go (Gin) on PostgreSQL, with Redis for distrib
 - Phone must match `^(\+91)?[6-9]\d{9}$` and is stored as 10 digits. Pincode must match `^[1-9]\d{5}$`.
 
 ### Booking creation flow
-1. Validate input (fields, phone, pincode, 30-min boundary, booking window, service exists).
-2. If an Idempotency-Key is present and already stored: same request hash → return the original booking with 201. Different hash → 422 IDEMPOTENCY_KEY_REUSED.
-3. Resolve the zone for the pincode (400 UNSERVICEABLE_PINCODE if none). Load the qualified technicians and their bookings for the day. Compute the free candidates and rank them.
-4. For each candidate in order:
+1. Parse and validate the fields (service id format, phone, pincode, startTime format, Idempotency-Key at most 255 chars).
+2. If an Idempotency-Key is present and already stored: same request hash → return the original booking with 201. Different hash → 422 IDEMPOTENCY_KEY_REUSED. This runs **before** the time-based checks, so a retry still replays after the booking window has moved on.
+3. Check the 30-min boundary and the booking window; resolve the service (unknown → 400).
+4. Resolve the zone for the pincode (400 UNSERVICEABLE_PINCODE if none). Load the qualified technicians and their bookings for the day. Compute the free candidates and rank them.
+5. For each candidate in order:
    - Acquire the Redis lock keyed by technician UUID and IST date. Wait up to 3 s, polling about every 25 ms. The lock TTL is 5 s and the token is random.
    - While holding the lock, with a 2 s DB timeout, re-read that technician's bookings, re-check the overlap, then insert.
    - Release the lock with an atomic compare-and-delete on the token.
    - If the technician turned out to be busy, or the insert hit the exclusion constraint (SQLSTATE 23P01), try the next candidate.
    - If the insert hit the idempotency-key unique constraint (23505), fetch and return the winner's booking.
-5. If no candidate succeeds: 409 NO_AVAILABILITY. If the lock wait times out: 503 BOOKING_BUSY with `Retry-After: 1`. If Redis is unreachable: 503 DEPENDENCY_UNAVAILABLE (fail closed). GET and cancel endpoints do not use locks.
-6. Why lock per technician-day rather than per slot: a per-slot key would let overlapping jobs at different start times (10:00 and 10:30) both pass. Different days never interact because the latest blocked time is 20:30.
-7. Why the Redis lock is the primary mechanism: locking stays independent of the database choice. The exclusion constraint is a Postgres-specific safety net for lock expiry and Redis failover.
+6. If no candidate succeeds: 409 NO_AVAILABILITY. If the lock wait times out: 503 BOOKING_BUSY with `Retry-After: 1`. If Redis or Postgres is unreachable: 503 DEPENDENCY_UNAVAILABLE with `Retry-After: 1` (fail closed; on any endpoint, a Postgres outage is a 503). GET and cancel endpoints do not use locks.
+7. Why lock per technician-day rather than per slot: a per-slot key would let overlapping jobs at different start times (10:00 and 10:30) both pass. Different days never interact because the latest blocked time is 20:30.
+8. Why the Redis lock is the primary mechanism: locking stays independent of the database choice. The exclusion constraint is a Postgres-specific safety net for lock expiry and Redis failover.
 
 ### API contracts
 - `GET /availability?serviceId=&pincode=&date=` returns `{date, serviceId, pincode, slots: ["HH:MM", …]}`, plus `message` only when `slots` is empty (still HTTP 200).
@@ -177,12 +178,12 @@ A REST booking service written in Go (Gin) on PostgreSQL, with Redis for distrib
   - 404: NOT_FOUND, only for ids in the URL path.
   - 409: NO_AVAILABILITY, CANCELLATION_WINDOW_CLOSED, INVALID_STATE.
   - 422: IDEMPOTENCY_KEY_REUSED.
-  - 429: RATE_LIMITED, with Retry-After.
-  - 503: BOOKING_BUSY, with Retry-After. DEPENDENCY_UNAVAILABLE.
+  - 429: RATE_LIMITED, with Retry-After and `details.retryAfterSeconds` (the limit and window are not exposed).
+  - 503: BOOKING_BUSY and DEPENDENCY_UNAVAILABLE, both with `Retry-After: 1`.
 
 ### Cross-cutting
-- Request id: reuse the incoming `X-Request-Id` or generate a UUID. Store it in the request context and logger. Echo it in the response header and in error bodies.
-- Rate limit: a Redis fixed window keyed by client IP and minute, 10 `POST /bookings` per minute, applied only to that route. Fail open if Redis errors.
+- Request id: reuse the incoming `X-Request-Id` if it is a plain token (`[A-Za-z0-9._-]`, at most 128 chars, since it is echoed into logs and headers), otherwise generate a UUID. Store it in the request context; a log handler adds it to every line logged with that context. Echo it in the response header and in error bodies.
+- Rate limit: a Redis fixed window keyed by client IP and window, default 10 `POST /bookings` per minute (env-configurable), applied only to that route. Client IP is the socket peer (forwarding headers are not trusted). Fail open if Redis errors.
 - Graceful shutdown on SIGINT/SIGTERM.
 
 ## Testing Decisions
@@ -212,6 +213,16 @@ A REST booking service written in Go (Gin) on PostgreSQL, with Redis for distrib
 - DESIGN.md (Part B) and the README AI-usage section: deferred, to be discussed separately.
 
 ## Further Notes
+
+- Revisions after the code review against this spec:
+  - Validation lives in services; handlers only bind (see Modules).
+  - Idempotency replay runs before the time-based checks (see Booking creation flow).
+  - A Postgres outage maps to 503 DEPENDENCY_UNAVAILABLE, not 500.
+  - The request id is attached to every log line through the request context.
+  - Health probes are not access-logged.
+  - Malformed client request ids are replaced.
+  - The rate limit is env-configurable and its 429 exposes only the wait.
+  - HTTP tests now cover BOOKING_BUSY and both DEPENDENCY_UNAVAILABLE causes.
 
 - Known limits:
   - "Fewest bookings that day" is best-effort under races, because a racing loser falls to the next technician.

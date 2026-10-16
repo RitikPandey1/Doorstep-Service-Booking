@@ -93,7 +93,7 @@ All technicians work **08:00–20:00 IST**. The ids are fixed so the examples be
 Conventions:
 - All times are **IST**. Timestamps are ISO-8601 with an offset (`2026-10-18T10:00:00+05:30`); input without an offset is read as IST. Dates are `YYYY-MM-DD`.
 - Only UUIDs are exposed as ids. Internal integer keys never leave the database.
-- Every response carries an `X-Request-Id` header. A well-formed incoming one is reused; otherwise one is generated.
+- Every response carries an `X-Request-Id` header. A well-formed incoming one is reused; otherwise one is generated. The same id appears in error bodies and on every log line for that request.
 
 > The examples use `2026-10-18`. Replace it with a date between 2 hours and 7 days from now.
 
@@ -197,7 +197,7 @@ Every error uses this body:
 | 422 | `IDEMPOTENCY_KEY_REUSED` | Same `Idempotency-Key`, different request |
 | 429 | `RATE_LIMITED` | More than `RATE_LIMIT_REQUESTS` `POST /bookings` in one `RATE_LIMIT_WINDOW`. The wait is in the message, in `details.retryAfterSeconds` and in the `Retry-After` header (see below) |
 | 503 | `BOOKING_BUSY` | Couldn't get the technician lock within 3s. Comes with `Retry-After: 1`; retrying with the same `Idempotency-Key` is safe |
-| 503 | `DEPENDENCY_UNAVAILABLE` | Redis is unreachable, so booking fails closed. Comes with `Retry-After: 1` |
+| 503 | `DEPENDENCY_UNAVAILABLE` | Redis is unreachable (booking fails closed) or Postgres is unreachable or timing out (any endpoint). Comes with `Retry-After: 1` |
 | 500 | `INTERNAL_ERROR` | Anything unexpected. Logged with the request id |
 
 A rate-limited response tells the client how long to wait (`Retry-After: 42` is also set):
@@ -248,7 +248,7 @@ The DB work inside the lock runs under a 2s timeout, well below the 5s TTL. The 
 
 **Infrastructure behaviour**
 - Rate limiting is a fixed window per client IP, per minute, shared across replicas through Redis. It fails open if Redis errors. Client IP is the socket peer, because `X-Forwarded-For` is not trusted.
-- If Redis is down, `POST /bookings` fails closed (`503`). Reads and cancel keep working.
+- If Redis is down, `POST /bookings` fails closed (`503`). Reads and cancel keep working. If Postgres is down, every endpoint that needs it returns a retryable `503`, not a `500`.
 
 ---
 
@@ -268,3 +268,4 @@ internal/models/            API request/response shapes
 internal/domains/           DB structs + converters to API models
 internal/utils/             constants, errors, IST time helpers, validation
 ```
+
