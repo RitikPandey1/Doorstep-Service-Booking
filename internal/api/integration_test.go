@@ -331,7 +331,7 @@ func TestRateLimitOnCreateBooking(t *testing.T) {
 	}
 	res, e := post()
 	wait, _ := e.Error.Details["retryAfterSeconds"].(float64)
-	if res.StatusCode != http.StatusTooManyRequests || e.Error.Code != "RATE_LIMITED" ||
+	if res.StatusCode != http.StatusTooManyRequests || e.Error.Code != "RATE_LIMITED" || len(e.Error.Details) != 1 ||
 		wait < 1 || wait > 3600 || res.Header.Get("Retry-After") != fmt.Sprint(wait) ||
 		!strings.Contains(e.Error.Message, fmt.Sprintf("retry in %v seconds", wait)) {
 		t.Fatalf("third request: %d Retry-After=%q body=%+v, want 429 with matching wait", res.StatusCode, res.Header.Get("Retry-After"), e)

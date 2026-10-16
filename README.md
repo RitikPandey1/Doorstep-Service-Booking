@@ -203,7 +203,7 @@ Every error uses this body:
 A rate-limited response tells the client how long to wait (`Retry-After: 42` is also set):
 ```json
 {"error":{"code":"RATE_LIMITED","message":"too many booking requests, retry in 42 seconds",
- "details":{"retryAfterSeconds":42,"limit":10,"windowSeconds":60},"requestId":"…"}}
+ "details":{"retryAfterSeconds":42},"requestId":"…"}}
 ```
 
 ---
