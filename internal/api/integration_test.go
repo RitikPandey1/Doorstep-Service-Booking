@@ -285,3 +285,18 @@ func TestListBookingsByPhone(t *testing.T) {
 		t.Fatalf("missing phone: %d", r.status)
 	}
 }
+
+func TestRequestID(t *testing.T) {
+	reset(t)
+	r := call(t, "GET", "/bookings/"+uuid.NewString(), nil, "X-Request-Id", "client-abc-123")
+	var e models.ErrorResponse
+	r.decode(t, &e)
+	if r.header.Get("X-Request-Id") != "client-abc-123" || e.Error.RequestID != "client-abc-123" {
+		t.Fatalf("header %q body %q, want client id echoed", r.header.Get("X-Request-Id"), e.Error.RequestID)
+	}
+
+	r = call(t, "GET", "/bookings/"+uuid.NewString(), nil, "X-Request-Id", "bad id with spaces")
+	if id := r.header.Get("X-Request-Id"); uuid.Validate(id) != nil {
+		t.Fatalf("invalid client id should be replaced by a UUID, got %q", id)
+	}
+}

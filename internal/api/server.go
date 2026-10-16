@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/api/handlers"
+	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/api/middleware"
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/lock"
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/repository"
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/services"
@@ -38,9 +39,15 @@ func NewRouter(d Deps) *gin.Engine {
 	technicianH := handlers.NewTechnicianHandler(services.NewTechnicianService(techRepo, bookingRepo))
 
 	r := gin.New()
-	r.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
-		handlers.RespondError(c, fmt.Errorf("panic: %v", err))
-	}))
+	// Use the socket peer as client IP; trusting X-Forwarded-For from anyone would let clients dodge the rate limit.
+	_ = r.SetTrustedProxies(nil)
+	r.Use(
+		middleware.RequestID(),
+		middleware.AccessLog(),
+		gin.CustomRecovery(func(c *gin.Context, err any) {
+			handlers.RespondError(c, fmt.Errorf("panic: %v", err))
+		}),
+	)
 	r.NoRoute(func(c *gin.Context) {
 		handlers.RespondError(c, utils.NotFoundError("route not found"))
 	})
