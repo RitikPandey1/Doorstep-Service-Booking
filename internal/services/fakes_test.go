@@ -133,6 +133,7 @@ func (f *fakeDB) ListLiveForTechnicians(_ context.Context, pks []int64, from, to
 			out = append(out, b)
 		}
 	}
+	slices.SortFunc(out, func(a, b domains.Booking) int { return a.StartTime.Compare(b.StartTime) }) // like ORDER BY start_time
 	return out, nil
 }
 
