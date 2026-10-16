@@ -24,3 +24,13 @@ const (
 	MaxLeadTime  = 7 * 24 * time.Hour // latest booking start from now
 	CancelCutoff = time.Hour          // cancellation allowed until start - CancelCutoff
 )
+
+// Technician-day lock timings. LockedWorkTimeout must stay well below LockTTL so
+// the DB write finishes (or is abandoned) before the lock can expire under us.
+const (
+	LockTTL           = 5 * time.Second
+	LockWait          = 3 * time.Second
+	LockedWorkTimeout = 2 * time.Second
+)
+
+const MaxIdempotencyKeyLen = 255
