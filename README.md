@@ -216,7 +216,7 @@ A rate-limited response tells the client how long to wait (`Retry-After: 42` is 
 2. **Re-check under the lock.** The technician's bookings are re-read and the rules re-applied. If the technician has been taken, the service moves on to the next-ranked one.
 3. **Database backstop.** A Postgres `EXCLUDE USING gist (technician_pk WITH =, tstzrange(start_time, blocked_until) WITH &&) WHERE status <> 'CANCELLED'` makes overlapping live bookings impossible even if a lock expires mid-write. A violation is treated as "taken, try the next technician".
 
-The DB work inside the lock runs under a 2s timeout, well below the 5s TTL. The full reasoning, including alternatives and failure modes, will go in `DESIGN.md`.
+The DB work inside the lock runs under a 2s timeout, well below the 5s TTL. The full reasoning, including alternatives, failure modes and scaling, is in [DESIGN.md](DESIGN.md).
 
 ---
 
