@@ -41,12 +41,18 @@ func main() {
 	rdb := redis.NewClient(redisOpts)
 	defer rdb.Close()
 
-	rateLimit, err := strconv.Atoi(utils.GetEnv("RATE_LIMIT_PER_MINUTE", "10"))
+	// POST /bookings rate limit: RATE_LIMIT_REQUESTS per client IP per RATE_LIMIT_WINDOW.
+	rateLimit, err := strconv.Atoi(utils.GetEnv("RATE_LIMIT_REQUESTS", "10"))
 	if err != nil || rateLimit < 0 {
-		fatal("parse RATE_LIMIT_PER_MINUTE", fmt.Errorf("want a non-negative integer, got %q", os.Getenv("RATE_LIMIT_PER_MINUTE")))
+		fatal("parse RATE_LIMIT_REQUESTS", fmt.Errorf("want a non-negative integer (0 disables), got %q", os.Getenv("RATE_LIMIT_REQUESTS")))
+	}
+	rateWindow, err := time.ParseDuration(utils.GetEnv("RATE_LIMIT_WINDOW", "1m"))
+	if err != nil || rateWindow < time.Second {
+		fatal("parse RATE_LIMIT_WINDOW", fmt.Errorf("want a duration of at least 1s like 30s or 1m, got %q", os.Getenv("RATE_LIMIT_WINDOW")))
 	}
 
-	router := api.NewRouter(api.Deps{DB: pool, Redis: rdb, Now: time.Now, BookingRateLimit: rateLimit})
+	router := api.NewRouter(api.Deps{DB: pool, Redis: rdb, Now: time.Now,
+		BookingRateLimit: rateLimit, BookingRateWindow: rateWindow})
 	srv := api.NewServer(":"+utils.GetEnv("PORT", "8080"), router)
 
 	go func() {

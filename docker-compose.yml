@@ -54,6 +54,8 @@ services:
       PORT: "8080"
       DATABASE_URL: postgres://booking:booking@postgres:5432/booking?sslmode=disable
       REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-10} # POST /bookings per client IP per window; 0 disables
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1m}
     ports:
       - "8080:8080"
     healthcheck:

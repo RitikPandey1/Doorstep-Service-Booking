@@ -31,7 +31,10 @@ Stop it and wipe the data with `docker compose down -v`.
 | `PORT`                  | `8080`                                                             | HTTP port                                  |
 | `DATABASE_URL`          | `postgres://booking:booking@localhost:5432/booking?sslmode=disable` | Postgres connection                        |
 | `REDIS_URL`             | `redis://localhost:6379/0`                                         | Redis connection                           |
-| `RATE_LIMIT_PER_MINUTE` | `10`                                                               | `POST /bookings` per client IP per minute; `0` disables it |
+| `RATE_LIMIT_REQUESTS`   | `10`                                                               | `POST /bookings` allowed per client IP per window; `0` disables the limit |
+| `RATE_LIMIT_WINDOW`     | `1m`                                                               | Rate-limit window as a Go duration (`30s`, `1m`, `1h`); at least `1s` |
+
+Compose reads `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW` from your shell or a `.env` file, e.g. `RATE_LIMIT_REQUESTS=5 RATE_LIMIT_WINDOW=30s docker compose up`.
 
 To run the API outside Docker, start only the dependencies with `docker compose up -d postgres redis migrate seed`, then run `go run ./cmd`.
 
@@ -99,7 +102,7 @@ Conventions:
 Returns the bookable start times. A slot is listed only if at least one qualified technician could take it.
 
 ```bash
-curl "localhost:8080/availability?serviceId=5e000000-0000-0000-0000-000000000001&pincode=110001&date=2026-10-18"
+curl "http://localhost:8080/availability?serviceId=5e000000-0000-0000-0000-000000000001&pincode=110001&date=2026-10-18"
 ```
 ```json
 {"date":"2026-10-18","serviceId":"5e000000-0000-0000-0000-000000000001","pincode":110001,
@@ -112,7 +115,7 @@ When nothing is free, the response is still `200`, with `"slots":[]` and `"messa
 Assigns the free qualified technician who has the fewest bookings that day. Ties go to the lowest internal technician id. The `Idempotency-Key` header is optional.
 
 ```bash
-curl -X POST localhost:8080/bookings \
+curl -X POST http://localhost:8080/bookings \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: 3f1c9a52-booking-1' \
   -d '{"serviceId":"5e000000-0000-0000-0000-000000000001","pincode":110001,"startTime":"2026-10-18T10:00:00+05:30","phone":"+919876543210"}'
 ```
@@ -131,21 +134,21 @@ curl -X POST localhost:8080/bookings \
 ### 3. `GET /bookings/{id}`
 
 ```bash
-curl localhost:8080/bookings/810858ce-ea5c-4b57-b4fb-b6e4771ea2b3
+curl http://localhost:8080/bookings/810858ce-ea5c-4b57-b4fb-b6e4771ea2b3
 ```
 Returns the booking, in the same shape as above.
 
 ### 4. `POST /bookings/{id}/cancel`
 
 ```bash
-curl -X POST localhost:8080/bookings/810858ce-ea5c-4b57-b4fb-b6e4771ea2b3/cancel
+curl -X POST http://localhost:8080/bookings/810858ce-ea5c-4b57-b4fb-b6e4771ea2b3/cancel
 ```
 Returns the booking with `"status":"CANCELLED"`. The slot becomes bookable again immediately.
 
 ### 5. `GET /technicians/{id}/schedule?date=`
 
 ```bash
-curl "localhost:8080/technicians/7e000000-0000-0000-0000-000000000001/schedule?date=2026-10-18"
+curl "http://localhost:8080/technicians/7e000000-0000-0000-0000-000000000001/schedule?date=2026-10-18"
 ```
 ```json
 {"technician":{"id":"7e000000-0000-0000-0000-000000000001","name":"Ravi Kumar"},"date":"2026-10-18",
@@ -166,7 +169,7 @@ Lists the technician's CONFIRMED and COMPLETED bookings in start order. Cancelle
 | `size` | Default 20, max 100 |
 
 ```bash
-curl "localhost:8080/bookings?phone=9876543210&status=CONFIRMED&page=1&size=20"
+curl "http://localhost:8080/bookings?phone=9876543210&status=CONFIRMED&page=1&size=20"
 ```
 ```json
 {"items":[{"id":"...", "...": "..."}],"page":1,"size":20,"total":1}
@@ -192,10 +195,16 @@ Every error uses this body:
 | 409 | `CANCELLATION_WINDOW_CLOSED` | Cancelling less than 1 hour before start |
 | 409 | `INVALID_STATE` | Cancelling a COMPLETED booking |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | Same `Idempotency-Key`, different request |
-| 429 | `RATE_LIMITED` | Over `RATE_LIMIT_PER_MINUTE` on `POST /bookings`. Comes with `Retry-After` |
+| 429 | `RATE_LIMITED` | More than `RATE_LIMIT_REQUESTS` `POST /bookings` in one `RATE_LIMIT_WINDOW`. The wait is in the message, in `details.retryAfterSeconds` and in the `Retry-After` header (see below) |
 | 503 | `BOOKING_BUSY` | Couldn't get the technician lock within 3s. Comes with `Retry-After: 1`; retrying with the same `Idempotency-Key` is safe |
 | 503 | `DEPENDENCY_UNAVAILABLE` | Redis is unreachable, so booking fails closed. Comes with `Retry-After: 1` |
 | 500 | `INTERNAL_ERROR` | Anything unexpected. Logged with the request id |
+
+A rate-limited response tells the client how long to wait (`Retry-After: 42` is also set):
+```json
+{"error":{"code":"RATE_LIMITED","message":"too many booking requests, retry in 42 seconds",
+ "details":{"retryAfterSeconds":42,"limit":10,"windowSeconds":60},"requestId":"…"}}
+```
 
 ---
 

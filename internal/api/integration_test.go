@@ -308,26 +308,33 @@ func TestRequestID(t *testing.T) {
 
 func TestRateLimitOnCreateBooking(t *testing.T) {
 	reset(t)
-	limited := httptest.NewServer(api.NewRouter(api.Deps{DB: pool, Redis: rdb, Now: clock.Now, BookingRateLimit: 2}))
+	// A 1h window keeps all three requests in one window regardless of when the test runs.
+	limited := httptest.NewServer(api.NewRouter(api.Deps{DB: pool, Redis: rdb, Now: clock.Now,
+		BookingRateLimit: 2, BookingRateWindow: time.Hour}))
 	defer limited.Close()
-	post := func() *http.Response {
+	post := func() (*http.Response, models.ErrorResponse) {
 		res, err := http.Post(limited.URL+"/bookings", "application/json", strings.NewReader(`{}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		res.Body.Close()
-		return res
+		defer res.Body.Close()
+		var e models.ErrorResponse
+		json.NewDecoder(res.Body).Decode(&e)
+		return res, e
 	}
 
 	// The limiter runs before the handler, so invalid bodies still count.
 	for i := range 2 {
-		if res := post(); res.StatusCode != http.StatusBadRequest {
+		if res, _ := post(); res.StatusCode != http.StatusBadRequest {
 			t.Fatalf("request %d: %d, want 400 from the handler", i+1, res.StatusCode)
 		}
 	}
-	res := post()
-	if res.StatusCode != http.StatusTooManyRequests || res.Header.Get("Retry-After") == "" {
-		t.Fatalf("third request: %d Retry-After=%q, want 429 with Retry-After", res.StatusCode, res.Header.Get("Retry-After"))
+	res, e := post()
+	wait, _ := e.Error.Details["retryAfterSeconds"].(float64)
+	if res.StatusCode != http.StatusTooManyRequests || e.Error.Code != "RATE_LIMITED" ||
+		wait < 1 || wait > 3600 || res.Header.Get("Retry-After") != fmt.Sprint(wait) ||
+		!strings.Contains(e.Error.Message, fmt.Sprintf("retry in %v seconds", wait)) {
+		t.Fatalf("third request: %d Retry-After=%q body=%+v, want 429 with matching wait", res.StatusCode, res.Header.Get("Retry-After"), e)
 	}
 	if res, _ := http.Get(limited.URL + "/bookings/" + uuid.NewString()); res.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET must not be rate limited, got %d", res.StatusCode)

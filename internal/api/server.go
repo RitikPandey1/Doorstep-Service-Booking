@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -23,8 +24,9 @@ type Deps struct {
 	DB    *pgxpool.Pool
 	Redis *redis.Client
 	Now   func() time.Time
-	// BookingRateLimit is POST /bookings requests per client IP per minute; 0 disables it.
-	BookingRateLimit int
+	// BookingRateLimit is POST /bookings requests allowed per client IP per BookingRateWindow; 0 disables it.
+	BookingRateLimit  int
+	BookingRateWindow time.Duration // defaults to 1 minute
 }
 
 // NewRouter wires repositories → services → handlers and registers all routes.
@@ -64,7 +66,7 @@ func NewRouter(d Deps) *gin.Engine {
 	r.GET("/availability", availabilityH.Get)
 	createBooking := []gin.HandlerFunc{bookingH.Create}
 	if d.BookingRateLimit > 0 {
-		createBooking = append([]gin.HandlerFunc{middleware.RateLimit(d.Redis, d.BookingRateLimit, time.Minute)}, createBooking...)
+		createBooking = append([]gin.HandlerFunc{middleware.RateLimit(d.Redis, d.BookingRateLimit, cmp.Or(d.BookingRateWindow, time.Minute))}, createBooking...)
 	}
 	r.POST("/bookings", createBooking...)
 	r.GET("/bookings", bookingH.List)

@@ -38,9 +38,12 @@ func RateLimit(rdb *redis.Client, limit int, window time.Duration) gin.HandlerFu
 		}
 		if count.Val() > int64(limit) {
 			windowEnd := time.Unix(0, (slot+1)*int64(window))
-			c.Header("Retry-After", strconv.Itoa(int(math.Ceil(windowEnd.Sub(now).Seconds()))))
-			handlers.RespondError(c, utils.NewAppError(http.StatusTooManyRequests, utils.CodeRateLimited,
-				"too many booking requests, please retry later"))
+			wait := int(math.Ceil(windowEnd.Sub(now).Seconds()))
+			c.Header("Retry-After", strconv.Itoa(wait))
+			appErr := utils.NewAppError(http.StatusTooManyRequests, utils.CodeRateLimited,
+				fmt.Sprintf("too many booking requests, retry in %d seconds", wait))
+			appErr.Details = map[string]any{"retryAfterSeconds": wait, "limit": limit, "windowSeconds": int(window.Seconds())}
+			handlers.RespondError(c, appErr)
 			return
 		}
 		c.Next()
