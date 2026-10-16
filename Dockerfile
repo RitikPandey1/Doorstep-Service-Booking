@@ -3,7 +3,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/api ./cmd
+RUN CGO_ENABLED=0 go build -o /out/api ./cmd \
+ && CGO_ENABLED=0 go build -o /out/seed ./cmd/seed
 
 FROM alpine:3.22
 RUN adduser -D -u 10001 app
