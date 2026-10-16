@@ -56,6 +56,12 @@ services:
       REDIS_URL: redis://redis:6379/0
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     depends_on:
       seed:
         condition: service_completed_successfully

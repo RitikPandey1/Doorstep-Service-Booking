@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -39,6 +40,10 @@ func NewRouter(d Deps) *gin.Engine {
 	availabilityH := handlers.NewAvailabilityHandler(
 		services.NewAvailabilityService(serviceRepo, zoneRepo, techRepo, bookingRepo, d.Now))
 	technicianH := handlers.NewTechnicianHandler(services.NewTechnicianService(techRepo, bookingRepo))
+	healthH := handlers.NewHealthHandler(map[string]func(context.Context) error{
+		"postgres": d.DB.Ping,
+		"redis":    func(ctx context.Context) error { return d.Redis.Ping(ctx).Err() },
+	})
 
 	r := gin.New()
 	// Use the socket peer as client IP; trusting X-Forwarded-For from anyone would let clients dodge the rate limit.
@@ -54,6 +59,8 @@ func NewRouter(d Deps) *gin.Engine {
 		handlers.RespondError(c, utils.NotFoundError("route not found"))
 	})
 
+	r.GET("/healthz", healthH.Live)
+	r.GET("/readyz", healthH.Ready)
 	r.GET("/availability", availabilityH.Get)
 	createBooking := []gin.HandlerFunc{bookingH.Create}
 	if d.BookingRateLimit > 0 {

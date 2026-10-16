@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/api"
 	"github.com/RitikPandey1/Doorstep-Service-Booking/internal/models"
@@ -329,5 +331,37 @@ func TestRateLimitOnCreateBooking(t *testing.T) {
 	}
 	if res, _ := http.Get(limited.URL + "/bookings/" + uuid.NewString()); res.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET must not be rate limited, got %d", res.StatusCode)
+	}
+}
+
+func TestHealthEndpoints(t *testing.T) {
+	reset(t)
+	var h models.HealthResponse
+	if r := call(t, "GET", "/healthz", nil); r.status != http.StatusOK {
+		t.Fatalf("healthz: %d", r.status)
+	}
+	r := call(t, "GET", "/readyz", nil)
+	r.decode(t, &h)
+	if r.status != http.StatusOK || h.Status != "UP" || h.Checks["postgres"] != "UP" || h.Checks["redis"] != "UP" {
+		t.Fatalf("readyz: %d %s", r.status, r.body)
+	}
+
+	deadRedis := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	defer deadRedis.Close()
+	degraded := httptest.NewServer(api.NewRouter(api.Deps{DB: pool, Redis: deadRedis, Now: clock.Now}))
+	defer degraded.Close()
+
+	res, err := http.Get(degraded.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	h = models.HealthResponse{}
+	json.NewDecoder(res.Body).Decode(&h)
+	if res.StatusCode != http.StatusServiceUnavailable || h.Checks["redis"] != "DOWN" || h.Checks["postgres"] != "UP" {
+		t.Fatalf("readyz with Redis down: %d %+v", res.StatusCode, h)
+	}
+	if res, _ := http.Get(degraded.URL + "/healthz"); res.StatusCode != http.StatusOK {
+		t.Fatalf("healthz must ignore dependencies, got %d", res.StatusCode)
 	}
 }
